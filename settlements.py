@@ -35,7 +35,7 @@ TRANSACTION_TYPES = ['Sale', 'Return', 'Discount', 'DiscountCancel', 'Coupon', '
 
 
 # --- Date Range Configuration ---
-N_DAYS_TO_FETCH = 10 # Define the total number of days back you want to fetch data for
+N_DAYS_TO_FETCH = 30 # Define the total number of days back you want to fetch data for
 MAX_DAYS_PER_CHUNK = 15 # Max days per API call chunk (safety margin under 90)
 
 OVERALL_END_DATE_MS = int(time.time() * 1000)
