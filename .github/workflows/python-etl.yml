@@ -3,20 +3,20 @@ name: Run Python ETL Scripts
 on:
   push:
     branches:
-      - main # Trigger on pushes to the 'main' branch
+      - main
   schedule:
-    - cron: '0 2 * * *' # Example: Run daily at 2 AM UTC. Adjust as needed.
-  workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 jobs:
   run-scripts:
-    runs-on: ubuntu-latest # Use a Linux runner for the job
+    runs-on: ubuntu-latest
     permissions:
-      contents: 'read' # Required for checkout
+      contents: 'read'
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4 # Action to checkout your code from the repository
+      uses: actions/checkout@v4
 
     - name: Set up Google Cloud Service Account Key
       # This step creates a JSON key file from a GitHub Secret and sets
