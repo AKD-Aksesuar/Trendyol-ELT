@@ -18,17 +18,17 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up Google Cloud Service Account Key
-      # This step creates a JSON key file from a GitHub Secret and sets
-      # the GOOGLE_APPLICATION_CREDENTIALS environment variable.
-      # IMPORTANT: Store your Google Cloud Service Account Key JSON as a GitHub Secret
-      # named GOOGLE_CREDENTIALS.
-      run: |
-        echo "${{ secrets.GOOGLE_CREDENTIALS }}" > gcloud-key.json
-        echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcloud-key.json" >> $GITHUB_ENV
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }} # This secret holds your service account key JSON
+    - uses: google-github-actions/setup-gcloud@master
+      with:
+        version: 'latest' # Specify the version of gcloud you want to use
+        service_account_key: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }} # Ensure this secret is set in your GitHub repository
+        project_id: ${{ secrets.GCP_PROJECT_ID }} # Ensure this secret is set in your GitHub repository
+        export_default_credentials: true # Exports the credentials to the environment for use in your scripts
 
+    - name: Authenticate with Google Cloud
+      # Authenticates with Google Cloud using the service account key.
+      # This step is necessary if your scripts interact with Google Cloud services.
+      run: gcloud auth activate-service-account --key-file=${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
     - name: Set up Python
       # Sets up a Python environment on the runner.
       uses: actions/setup-python@v5
