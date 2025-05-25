@@ -16,11 +16,12 @@ TRENDYOL_SUPPLIER_ID = os.getenv('TRENDYOL_SUPPLIER_ID')
 API_URL = f"https://apigw.trendyol.com/integration/order/sellers/{TRENDYOL_SUPPLIER_ID}/orders"
 
 # --- Google Cloud BigQuery Credentials and Project ---
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS') # Path to your service account key
 GCP_PROJECT_ID = os.getenv('GCP_PROJECT_ID') # Your Google Cloud Project ID
-BIGQUERY_DATASET_ID = "trendyol" # Name of your BigQuery dataset
+BIGQUERY_DATASET_ID = os.getenv('BIGQUERY_DATASET_ID') # Name of your BigQuery dataset
 BIGQUERY_TEMP_TABLE_ID = "orders_temp" # Name of your temporary BigQuery table
 BIGQUERY_ORDERS_TABLE_ID = "orders" # Name of your main orders BigQuery table
-BIGQUERY_LOCATION = "europe-west4" # BigQuery dataset location
+BIGQUERY_LOCATION = os.getenv('BIGQUERY_LOCATION') # BigQuery dataset location
 
 # --- API Headers ---
 headers ={

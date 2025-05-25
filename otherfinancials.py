@@ -13,15 +13,15 @@ load_dotenv()
 # --- API Credentials ---
 TRENDYOL_API_TOKEN = os.getenv('TRENDYOL_API_TOKEN')
 TRENDYOL_SUPPLIER_ID = os.getenv('TRENDYOL_SUPPLIER_ID')
-# Updated API URL for otherfinancials
 API_URL = f"https://apigw.trendyol.com/integration/finance/che/sellers/{TRENDYOL_SUPPLIER_ID}/otherfinancials"
 
 # --- Google Cloud BigQuery Credentials and Project ---
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS') # Path to your service account key
 GCP_PROJECT_ID = os.getenv('GCP_PROJECT_ID') # Your Google Cloud Project ID
-BIGQUERY_DATASET_ID = "trendyol" # Name of your BigQuery dataset
+BIGQUERY_DATASET_ID = os.getenv('BIGQUERY_DATASET_ID') # Name of your BigQuery dataset
 BIGQUERY_TEMP_TABLE_ID = "otherfinancials_temp" # Temporary table for otherfinancials
 BIGQUERY_MAIN_TABLE_ID = "otherfinancials" # Main table for otherfinancials
-BIGQUERY_LOCATION = "europe-west4" # BigQuery dataset location
+BIGQUERY_LOCATION = os.getenv('BIGQUERY_LOCATION') # BigQuery dataset location
 
 # --- API Headers ---
 headers ={
