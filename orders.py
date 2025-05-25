@@ -30,8 +30,8 @@ headers ={
 }
 
 # --- Date Range Configuration ---
-N_DAYS_TO_FETCH = 90 # Define the total number of days back you want to fetch orders for
-MAX_DAYS_PER_CHUNK = 89 # Max days per API call chunk (using 89 for safety margin under 90)
+N_DAYS_TO_FETCH = 45 # Define the total number of days back you want to fetch orders for
+MAX_DAYS_PER_CHUNK = 15 # Max days per API call chunk
 
 OVERALL_END_DATE_MS = int(time.time() * 1000)
 OVERALL_START_DATE_MS = OVERALL_END_DATE_MS - (N_DAYS_TO_FETCH * 24 * 60 * 60 * 1000)

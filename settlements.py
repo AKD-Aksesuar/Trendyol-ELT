@@ -204,7 +204,6 @@ if __name__ == "__main__":
             ])
 
             print("\nPolars DataFrame created:")
-            print(df.head())
 
             if not GCP_PROJECT_ID:
                 print("GCP_PROJECT_ID not set in .env. Skipping BigQuery operations.")
