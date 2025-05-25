@@ -3,3 +3,4 @@ python-dotenv
 polars
 google-cloud-bigquery
 pyarrow
+aiohttp

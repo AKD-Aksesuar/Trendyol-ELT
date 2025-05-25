@@ -6,6 +6,9 @@ import json
 import time
 import io
 from google.cloud import bigquery
+import asyncio
+import aiohttp
+from typing import List, Dict, Any
 
 # Load Environment Variables
 load_dotenv()
@@ -38,6 +41,10 @@ TRANSACTION_TYPES = ['Sale', 'Return', 'Discount', 'DiscountCancel', 'Coupon', '
 N_DAYS_TO_FETCH = 30 # Define the total number of days back you want to fetch data for
 MAX_DAYS_PER_CHUNK = 15 # Max days per API call chunk (safety margin under 90)
 
+# Rate Limiting: 2000 requests per minute
+REQUESTS_PER_MINUTE = 2000
+REQUESTS_PER_SECOND = REQUESTS_PER_MINUTE / 60
+
 OVERALL_END_DATE_MS = int(time.time() * 1000)
 OVERALL_START_DATE_MS = OVERALL_END_DATE_MS - (N_DAYS_TO_FETCH * 24 * 60 * 60 * 1000)
 
@@ -48,67 +55,113 @@ base_params = {
     'size': 500 # Settlements API allows up to 500
 }
 
-# --- Pagination and Chunking Function for Settlements ---
-def fetch_settlements_in_chunks(transaction_type: str):
+# --- Parameter Generation Function ---
+def generate_api_call_params_settlements():
     """
-    Fetches settlements for a given transaction_type from the Trendyol API 
-    in chunks to respect date range limitations, with pagination within each chunk.
-    Returns a list of raw settlement dictionaries.
+    Generates a list of parameter dictionaries for each API call required,
+    considering transaction types, date chunking, and pagination.
     """
-    all_settlements_for_type = []
+    all_call_params = []
     current_chunk_start_ms = OVERALL_START_DATE_MS
     max_chunk_duration_ms = MAX_DAYS_PER_CHUNK * 24 * 60 * 60 * 1000
 
-    print(f"\nFetching settlements for Transaction Type: {transaction_type}")
     print(f"Overall fetch period: From {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(OVERALL_START_DATE_MS/1000))} to {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(OVERALL_END_DATE_MS/1000))}")
 
     while current_chunk_start_ms < OVERALL_END_DATE_MS:
         current_chunk_end_ms = min(current_chunk_start_ms + max_chunk_duration_ms, OVERALL_END_DATE_MS)
         
-        print(f"  Fetching for date chunk: "
+        print(f"\nGenerating parameters for date chunk: "
               f"From {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_chunk_start_ms/1000))} "
               f"to {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_chunk_end_ms/1000))}")
 
-        current_page_for_chunk = 0
-        while True:
-            call_params = base_params.copy()
-            call_params['startDate'] = current_chunk_start_ms
-            call_params['endDate'] = current_chunk_end_ms
-            call_params['transactionType'] = transaction_type
-            call_params['page'] = current_page_for_chunk
-
-            print(f"    Fetching page: {current_page_for_chunk} for current chunk...")
-
+        for transaction_type in TRANSACTION_TYPES:
+            print(f"  Generating parameters for Transaction Type: {transaction_type}")
+            # Initial sequential call to determine totalPages for this type and chunk
+            initial_params = base_params.copy()
+            initial_params['startDate'] = current_chunk_start_ms
+            initial_params['endDate'] = current_chunk_end_ms
+            initial_params['transactionType'] = transaction_type
+            initial_params['page'] = 0 
+            
             try:
-                response = requests.get(API_URL, headers=headers, params=call_params)
+                response = requests.get(API_URL, headers=headers, params=initial_params)
                 response.raise_for_status()
                 data = response.json()
-                settlements_on_page = data.get('content', [])
+                total_pages = data.get('totalPages', 1)
+                print(f"    Found {total_pages} pages for {transaction_type} in this chunk.")
 
-                if not settlements_on_page:
-                    print("    No more settlements found on this page or content is empty.")
-                    break 
-                all_settlements_for_type.extend(settlements_on_page)
-                print(f"    Fetched {len(settlements_on_page)} settlements on this page.")
+                for page_num in range(total_pages):
+                    call_params = base_params.copy()
+                    call_params['startDate'] = current_chunk_start_ms
+                    call_params['endDate'] = current_chunk_end_ms
+                    call_params['transactionType'] = transaction_type
+                    call_params['page'] = page_num
+                    all_call_params.append(call_params)
 
-                if current_page_for_chunk >= data.get('totalPages', 1) - 1:
-                    print("    Fetched all pages for this date chunk.")
-                    break 
-                current_page_for_chunk += 1
             except requests.exceptions.RequestException as e:
-                print(f"    Error fetching settlements: {e}")
+                print(f"    Error fetching initial page to determine pagination for {transaction_type}: {e}")
                 if response is not None:
                     print(f"    Response status: {response.status_code}, text: {response.text}")
-                break 
+                # Continue to the next transaction type/chunk even if one fails
             except json.JSONDecodeError:
-                print(f"    Error decoding JSON from response: {response.text if response else 'No response object'}")
-                break 
-        
+                print(f"    Error decoding JSON from initial response for {transaction_type}: {response.text if response else 'No response object'}")
+                # Continue to the next transaction type/chunk even if one fails
+
+        # Move to the start of the next chunk
         if current_chunk_end_ms == OVERALL_END_DATE_MS:
              break 
         current_chunk_start_ms = current_chunk_end_ms + 1 
+    
+    print(f"\nGenerated parameters for a total of {len(all_call_params)} API calls.")
+    return all_call_params
+
+# --- Asynchronous Fetching Function ---
+async def fetch_single_page_async_settlements(session: aiohttp.ClientSession, params: Dict[str, Any], limiter: asyncio.Semaphore):
+    """
+    Fetches a single page of settlements asynchronously.
+    """
+    await asyncio.sleep(1.0 / REQUESTS_PER_SECOND)
+    async with limiter: 
+        tx_type = params.get('transactionType', 'UNKNOWN')
+        page = params.get('page', 'UNKNOWN')
+        start_date = time.strftime('%Y-%m-%d', time.localtime(params.get('startDate', 0)/1000))
+        end_date = time.strftime('%Y-%m-%d', time.localtime(params.get('endDate', 0)/1000))
+        print(f"  Fetching {tx_type} page {page} for chunk {start_date} to {end_date}...")
+        try:
+            async with session.get(API_URL, headers=headers, params=params) as response:
+                response.raise_for_status()
+                data = await response.json()
+                settlements_on_page = data.get('content', [])
+                print(f"  Fetched {len(settlements_on_page)} records for {tx_type} page {page}.")
+                return settlements_on_page
+        except aiohttp.ClientResponseError as e:
+            print(f"  Error fetching {tx_type} page {page}: {e.status} - {e.message}")
+            return [] 
+        except aiohttp.ClientConnectionError as e:
+            print(f"  Connection error fetching {tx_type} page {page}: {e}")
+            return [] 
+        except json.JSONDecodeError:
+             response_text = await response.text() if response else 'No response object'
+             print(f"  Error decoding JSON from response for {tx_type} page {page}: {response_text}")
+             return [] 
+
+
+async def fetch_all_settlements_parallel(call_params_list: List[Dict[str, Any]], concurrency_limit: int = 10):
+    """
+    Fetches all settlements in parallel using the generated parameter list, with rate limiting.
+    """
+    all_settlements_raw = []
+    limiter = asyncio.Semaphore(concurrency_limit) 
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_single_page_async_settlements(session, params, limiter) for params in call_params_list]
+        results = await asyncio.gather(*tasks)
         
-    return all_settlements_for_type
+        for page_settlements in results:
+            all_settlements_raw.extend(page_settlements)
+    
+    return all_settlements_raw
+
 
 # --- BigQuery Merge and Drop Function for Settlements ---
 def merge_and_drop_settlements_temp_table(client: bigquery.Client):
@@ -167,90 +220,94 @@ def merge_and_drop_settlements_temp_table(client: bigquery.Client):
 if __name__ == "__main__":
     print("Starting settlement fetch process...")
     
-    all_fetched_settlements = []
-    for tx_type in TRANSACTION_TYPES:
-        settlements_for_current_type = fetch_settlements_in_chunks(tx_type)
-        all_fetched_settlements.extend(settlements_for_current_type)
-        print(f"Fetched {len(settlements_for_current_type)} records for transaction type: {tx_type}")
+    # Step 1: Generate all API call parameters
+    api_call_parameters = generate_api_call_params_settlements()
 
-    if all_fetched_settlements:
-        print(f"\nSuccessfully fetched a total of {len(all_fetched_settlements)} settlements across all types. Preparing DataFrame...")
-        data_for_df = []
-        for settlement_detail in all_fetched_settlements:
-            # IMPORTANT: Determine the correct unique ID field for settlements.
-            # Trying 'id', then 'transactionId'. Adjust if necessary.
-            unique_id = settlement_detail.get('id', settlement_detail.get('transactionId'))
-            if unique_id is None:
-                # Fallback or error handling if no ID is found.
-                # For now, skipping records without a clear ID to avoid MERGE issues.
-                # Consider logging this or using a hash of the record as an ID.
-                print(f"Warning: Settlement record missing 'id' or 'transactionId': {json.dumps(settlement_detail)[:100]}...")
-                continue 
-            
-            data_for_df.append({
-                'id': str(unique_id), # Ensure ID is string for consistency if it can be numeric/string
-                'transactionType': settlement_detail.get('transactionType', 'UNKNOWN'), # Get from data if available, else use the loop's tx_type
-                'rawJSON': json.dumps(settlement_detail)
-            })
+    if api_call_parameters:
+        # Step 2: Fetch settlements in parallel using async
+        print("\nStarting parallel settlement fetching...")
+        fetched_settlements_list = asyncio.run(fetch_all_settlements_parallel(api_call_parameters))
 
-        if not data_for_df:
-            print("No settlement data with valid IDs to process into DataFrame.")
-        else:
-            df = pl.DataFrame(data_for_df)
-            df = df.with_columns([
-                pl.col('id').cast(pl.String), 
-                pl.col('transactionType').cast(pl.String),
-                pl.col('rawJSON').cast(pl.String)
-            ])
+        if fetched_settlements_list:
+            print(f"\nSuccessfully fetched a total of {len(fetched_settlements_list)} settlements after parallel processing. Preparing DataFrame...")
+            data_for_df = []
+            for settlement_detail in fetched_settlements_list:
+                # IMPORTANT: Determine the correct unique ID field for settlements.
+                # Trying 'id', then 'transactionId'. Adjust if necessary.
+                unique_id = settlement_detail.get('id', settlement_detail.get('transactionId'))
+                if unique_id is None:
+                    # Fallback or error handling if no ID is found.
+                    # For now, skipping records without a clear ID to avoid MERGE issues.
+                    # Consider logging this or using a hash of the record as an ID.
+                    print(f"Warning: Settlement record missing 'id' or 'transactionId': {json.dumps(settlement_detail)[:100]}...")
+                    continue 
+                
+                data_for_df.append({
+                    'id': str(unique_id), # Ensure ID is string for consistency if it can be numeric/string
+                    'transactionType': settlement_detail.get('transactionType', 'UNKNOWN'), # Get from data if available, else use the loop's tx_type
+                    'rawJSON': json.dumps(settlement_detail)
+                })
 
-            print("\nPolars DataFrame created:")
-
-            if not GCP_PROJECT_ID:
-                print("GCP_PROJECT_ID not set in .env. Skipping BigQuery operations.")
+            if not data_for_df:
+                print("No settlement data with valid IDs to process into DataFrame.")
             else:
-                load_to_temp_successful = False
-                client = bigquery.Client(project=GCP_PROJECT_ID, location=BIGQUERY_LOCATION)
-                try:
-                    temp_table_ref = client.dataset(BIGQUERY_DATASET_ID).table(BIGQUERY_TEMP_TABLE_ID)
-                    print(f"\nAttempting to load DataFrame to BigQuery temp table: {GCP_PROJECT_ID}.{BIGQUERY_DATASET_ID}.{BIGQUERY_TEMP_TABLE_ID}...")
-                    
-                    schema = [
-                        bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
-                        bigquery.SchemaField("transactionType", "STRING", mode="NULLABLE"),
-                        bigquery.SchemaField("rawJSON", "STRING", mode="NULLABLE")
-                    ]
+                df = pl.DataFrame(data_for_df)
+                df = df.with_columns([
+                    pl.col('id').cast(pl.String), 
+                    pl.col('transactionType').cast(pl.String),
+                    pl.col('rawJSON').cast(pl.String)
+                ])
 
-                    with io.BytesIO() as stream:
-                        df.write_parquet(stream) 
-                        stream.seek(0)
+                print("\nPolars DataFrame created:")
 
-                        parquet_options = bigquery.ParquetOptions()
-                        parquet_options.enable_list_inference = True
-
-                        job_config = bigquery.LoadJobConfig(
-                            source_format=bigquery.SourceFormat.PARQUET,
-                            parquet_options=parquet_options,
-                            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-                            schema=schema, 
-                        )
-
-                        load_job = client.load_table_from_file(
-                            stream,
-                            temp_table_ref,
-                            job_config=job_config,
-                        )
-                        load_job.result() 
-                        if load_job.errors:
-                             print(f"Load to temp table job failed with errors: {load_job.errors}")
-                        else:
-                            print(f"Loaded {load_job.output_rows} rows into temp table {temp_table_ref}.")
-                            load_to_temp_successful = True
-                except Exception as e:
-                    print(f"Error loading data to BigQuery temp table: {e}")
-
-                if load_to_temp_successful:
-                    merge_and_drop_settlements_temp_table(client)
+                if not GCP_PROJECT_ID:
+                    print("GCP_PROJECT_ID not set in .env. Skipping BigQuery operations.")
                 else:
-                    print("Skipping MERGE and DROP operations due to failure in loading to temp table.")
+                    load_to_temp_successful = False
+                    client = bigquery.Client(project=GCP_PROJECT_ID, location=BIGQUERY_LOCATION)
+                    try:
+                        temp_table_ref = client.dataset(BIGQUERY_DATASET_ID).table(BIGQUERY_TEMP_TABLE_ID)
+                        print(f"\nAttempting to load DataFrame to BigQuery temp table: {GCP_PROJECT_ID}.{BIGQUERY_DATASET_ID}.{BIGQUERY_TEMP_TABLE_ID}...")
+                        
+                        schema = [
+                            bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
+                            bigquery.SchemaField("transactionType", "STRING", mode="NULLABLE"),
+                            bigquery.SchemaField("rawJSON", "STRING", mode="NULLABLE")
+                        ]
+
+                        with io.BytesIO() as stream:
+                            df.write_parquet(stream) 
+                            stream.seek(0)
+
+                            parquet_options = bigquery.ParquetOptions()
+                            parquet_options.enable_list_inference = True
+
+                            job_config = bigquery.LoadJobConfig(
+                                source_format=bigquery.SourceFormat.PARQUET,
+                                parquet_options=parquet_options,
+                                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+                                schema=schema, 
+                            )
+
+                            load_job = client.load_table_from_file(
+                                stream,
+                                temp_table_ref,
+                                job_config=job_config,
+                            )
+                            load_job.result() 
+                            if load_job.errors:
+                                 print(f"Load to temp table job failed with errors: {load_job.errors}")
+                            else:
+                                print(f"Loaded {load_job.output_rows} rows into temp table {temp_table_ref}.")
+                                load_to_temp_successful = True
+                    except Exception as e:
+                        print(f"Error loading data to BigQuery temp table: {e}")
+
+                    if load_to_temp_successful:
+                        merge_and_drop_settlements_temp_table(client)
+                    else:
+                        print("Skipping MERGE and DROP operations due to failure in loading to temp table.")
+        else:
+            print("No settlements fetched after parallel processing. Nothing to load to BigQuery.")
     else:
-        print("No settlements found after processing all transaction types and chunks.")
+        print("No API call parameters generated. Nothing to fetch.")
